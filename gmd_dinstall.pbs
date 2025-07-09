@@ -1,0 +1,49 @@
+#!/bin/bash
+#PBS -N sc_and_ec_test
+#PBS -l nodes=1:ppn=12
+#PBS -q ihuman_pub
+#PBS -l walltime=480:00:00
+#PBS -o test.log 
+#PBS -e test.err 
+
+# Function to calculate Sc
+hostname
+date
+echo RUNNING
+module load cuda/7/12.2
+module load mathlib/fftw/3.3.8/7/sharelib
+# module load compiler/gnu/13.2
+# module load compiler/gnu/gmp
+# module load compiler/gnu/mpfr
+# module load compiler/gnu/mpc
+# module load apps/zlib/arm_1.2.11
+# module load apps/7/glibc/2.18
+# module load apps/gromacs/2023_openmpi_gpu
+source /public/home/liad/anaconda3/bin/activate lluoto_score
+# ./configure --prefix=/public/home/liad/lluoto/hwloc/
+# WORKDIR=/public/home/liad/lluoto/gcc-11.1.0/build
+# WORKDIR=/public/home/liad/lluoto/hwloc-1.11.13
+cd $WORKDIR
+# rm -rf *
+# mkdir build
+# ../configure   --prefix=/public/home/liad/lluoto/gcc11 --disable-multilib --enable-languages=c,c++ --with-system-zlib CC=$(which gcc) CXX=$(which g++) --prefix=/public/home/liad/lluoto/hwloc/ --with-libiconv --disable-nls
+# ./configure --prefix=/public/home/liad/lluoto/hwloc/
+# make
+# make 
+# make install -j 12
+
+WORKDIR=/public/home/liad/lluoto/gromacs-2025.1
+# # WORKDIR=/public/home/liad/lluoto/hwloc-1.11.13
+cd $WORKDIR
+# # mkdir build
+cd build
+rm -rf *
+# # ./configure --prefix=/public/home/liad/lluoto/hwloc/
+# # make
+# /public/home/liad/lluoto/cmake-3.28.0-linux-x86_64/bin/cmake .. -DGMX_HWLOC=ON -DHWLOC_INCLUDE_DIRS=/public/home/liad/lluoto/hwloc/include -DFFTW_LIBRARY=/public/software/mathlib/fftw/3.3.8/7/fftw3/lib/libfftw3.so -DHWLOC_LIBRARIES=/public/home/liad/lluoto/hwloc/lib/libhwloc.so -DGMX_DOUBLE=ON -DCMAKE_INSTALL_PREFIX=/public/home/liad/lluoto/gmx_gpu_25 -DCMAKE_C_COMPILER=/public/home/liad/lluoto/hwloc/bin/gcc -DCMAKE_CXX_COMPILER=/public/home/liad/lluoto/hwloc/bin/g++
+/public/home/liad/lluoto/cmake-3.28.0-linux-x86_64/bin/cmake .. -DCMAKE_INSTALL_PREFIX=/public/home/liad/lluoto/gmx_gpu_25 -DCMAKE_C_COMPILER=/public/home/liad/lluoto/hwloc/bin/gcc -DCMAKE_CXX_COMPILER=/public/home/liad/lluoto/hwloc/bin/g++ -DGMX_GPU=CUDA
+
+# # LD_LIBRARY_PATH=/public/sourcecode/apps/amber/amber20_src/AmberTools/src/mpich-3.3.2/src/pm/hydra/tools/topo/hwloc/hwloc/include/hwloc.h 
+make install -j 12
+
+# echo FINISHED
