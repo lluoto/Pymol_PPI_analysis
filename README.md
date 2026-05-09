@@ -20,7 +20,7 @@ PyMOL-based protein-protein interaction (PPI) analysis script. Detect and visual
 
 | File | Description |
 |---|---|
-| `prolif_pymol_vis.py` | Main PPI analysis script (unified agent entrypoint) |
+| `prolif_pymol_vis.py` | Main PPI analysis script (unified agent entrypoint,final script) |
 | `residue_contact_ring.py` | Ring-specific contact analysis variant |
 | `findcontactsV2-3.tcl` | VMD Tcl script for trajectory contact/SASA analysis (forked from [FindContacts](https://github.com/TMiclot/FindContacts)) |
 
