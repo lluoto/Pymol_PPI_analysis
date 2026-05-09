@@ -1,0 +1,441 @@
+#!/usr/bin/env python
+# coding: utf-8
+'''
+    Author: Chenxi Wang (chenxi.wang@salilab.org) Yulin Luo
+    Date: 2024-6-21
+    Updated: 2025 - Added all ProLIF interaction types with moland color system
+    
+    The residue contacts in the GLP-1R-Gs interface is calculated by Pymol.
+    Now supports ProLIF interaction types: HydrogenBond, Hydrophobic, PiStacking, 
+    EdgeToFace, FaceToFace, CationPi, PiCation, SaltBridge, HalogenBond, Metal, VdWContact
+'''
+
+from pymol import cmd
+from pymol import stored
+import time
+import csv
+import os
+
+cmd.set_color('protein_gray', [0.89, 0.94, 0.98])
+cmd.set_color('ligand_green', [0.83, 0.89, 0.72])
+cmd.set_color('hydrophobic_gray', [0.69, 0.67, 0.72])
+cmd.set_color('hydrogen_bond_blue', [0.204, 0.561, 0.655])
+cmd.set_color('pi_cation_orange', [0.97, 0.79, 0.49])
+cmd.set_color('pi_stack_purple', [0.812, 0.686, 0.831])
+cmd.set_color('salt_bridge_red', [0.929, 0.759, 0.662])
+cmd.set_color('H_color', [0.7, 0.7, 0.7])
+cmd.set_color('oxygen_color', [1.0, 0.0, 0.0])
+cmd.set_color('nitrogen_color', [0.0, 0.0, 1.0])
+cmd.set_color('fluorine_color', [0.251, 0.718, 0.678])
+cmd.set_color('sulfur_color', [1.0, 1.0, 0.0])
+
+cmd.set('light_count',10)
+cmd.set('spec_count',1)
+cmd.set('shininess',10)
+cmd.set('specular',0.4)
+cmd.set('ambient',0)
+cmd.set('direct',0.45)
+cmd.set('reflect',0.75)
+cmd.set('ray_shadow_decay_factor',0.1)
+cmd.set('ray_shadow_decay_range',2)
+cmd.set('cartoon_fancy_helices', 1)
+cmd.set('cartoon_fancy_sheets', 1)
+cmd.set('cartoon_rect_width', 0.3)
+cmd.set('cartoon_rect_length', 2)
+cmd.set('cartoon_loop_radius', 0.15)
+cmd.set('cartoon_rect_width', 0.3)
+cmd.set('specular', 0.6)
+
+cmd.bg_color('white')
+
+start=time.time()
+
+amino_acid_map = {
+    'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D',
+    'CYS': 'C', 'GLU': 'E', 'GLN': 'Q', 'GLY': 'G',
+    'HIS': 'H', 'ILE': 'I', 'LEU': 'L', 'LYS': 'K',
+    'MET': 'M', 'PHE': 'F', 'PRO': 'P', 'SER': 'S',
+    'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
+}
+
+hbonds_atoms = {
+    'ARG': ['NE', 'NH1', 'NH2'],
+    'ASN': ['OD1', 'ND2'],
+    'ASP': ['OD1', 'OD2'],
+    'CYS': ['SG'],
+    'GLN': ['OE1', 'NE2'],
+    'GLU': ['OE1', 'OE2'],
+    'HIS': ['ND1', 'NE2'],
+    'LYS': ['NZ'],
+    'MET': ['SD'],
+    'SER': ['OG'],
+    'THR': ['OG1'],
+    'TRP': ['NE1'],
+    'TYR': ['OH']
+}
+
+MOLAND_COLORS = {
+    'HydrogenBond': {
+        'first': [0.204, 0.561, 0.655],
+        'second': [0.404, 0.761, 0.855],
+    },
+    'Hydrophobic': {
+        'first': [0.69, 0.67, 0.72],
+        'second': [0.89, 0.87, 0.92],
+    },
+    'PiStacking': {
+        'first': [0.812, 0.686, 0.831],
+        'second': [0.906, 0.843, 0.915],
+    },
+    'EdgeToFace': {
+        'first': [0.6, 0.4, 0.8],
+        'second': [0.8, 0.6, 0.9],
+    },
+    'FaceToFace': {
+        'first': [0.7, 0.5, 0.9],
+        'second': [0.85, 0.75, 0.95],
+    },
+    'CationPi': {
+        'first': [0.97, 0.79, 0.49],
+        'second': [0.985, 0.895, 0.745],
+    },
+    'PiCation': {
+        'first': [0.97, 0.79, 0.49],
+        'second': [0.985, 0.895, 0.745],
+    },
+    'SaltBridge': {
+        'first': [0.929, 0.759, 0.662],
+        'second': [0.965, 0.88, 0.831],
+    },
+    'HalogenBond': {
+        'first': [0.251, 0.718, 0.678],
+        'second': [0.525, 0.859, 0.839],
+    },
+    'Metal': {
+        'first': [1.0, 1.0, 0.0],
+        'second': [1.0, 1.0, 0.5],
+    },
+    'VdWContact': {
+        'first': [0.89, 0.94, 0.98],
+        'second': [0.945, 0.97, 0.99],
+    },
+    'WaterBridge': {
+        'first': [0.631, 0.769, 0.992],
+        'second': [0.815, 0.884, 0.996],
+    },
+}
+
+for inter_type, colors in MOLAND_COLORS.items():
+    color_name = f"{inter_type.lower()}_first"
+    cmd.set_color(color_name, colors['first'])
+    color_name_second = f"{inter_type.lower()}_second"
+    cmd.set_color(color_name_second, colors['second'])
+
+PROLIF_INTERACTION_COLORS = {
+    'HBDonor': 'hydrogen_bond_first',
+    'HBAcceptor': 'hydrogen_bond_first',
+    'Hydrophobic': 'hydrophobic_first',
+    'PiStacking': 'pi_stack_first',
+    'FaceToFace': 'pi_stack_first',
+    'EdgeToFace': 'pistacking_first',
+    'CationPi': 'pi_cation_first',
+    'PiCation': 'pi_cation_first',
+    'Cationic': 'salt_bridge_first',
+    'Anionic': 'salt_bridge_first',
+    'VdWContact': 'vdwcontact_first',
+    'XBAcceptor': 'halogenbond_first',
+    'XBDonor': 'halogenbond_first',
+    'MetalDonor': 'metal_first',
+    'MetalAcceptor': 'metal_first',
+    'WaterBridge': 'waterbridge_first',
+}
+
+def list_electron_interaction(selection, channel, partners, selection2=None, cutoff=4.0, angle=150, mode=1, hb_list_name='hbonds'):
+    cutoff = float(cutoff)
+    angle = float(angle)
+    mode = float(mode)
+    posresList = ["LYS","ARG","HIS","HIP"]
+    negresList = ["GLU","ASP","CYM"]
+    posatomList = ["NE","NH1","NH2","NZ","ND1","NE2"]
+    negatomList = ["SG","OE1","OE2","OD1","OD2"]
+    
+    selection = selection + " & e. n+o+s"
+    
+    sb = cmd.find_pairs(selection, selection, mode=mode, cutoff=cutoff, angle=angle)
+    sb.sort(key=lambda x:x[0][1])
+    
+    result_h = []
+    result_s = []
+    
+    for pairs in sb:
+        stored.x = []
+        stored.y = []
+        cmd.iterate("%s and index %s" % (pairs[0][0], pairs[0][1]), 'stored.x += [chain,resi,resn,name]')
+        cmd.iterate("%s and index %s" % (pairs[1][0], pairs[1][1]), 'stored.y += [chain,resi,resn,name]')
+        
+        if stored.x[0] in channel and stored.y[0] in partners:
+            cmd.show('stick', "chain %s and resi %s chain %s and resi %s" % (stored.x[0], stored.x[1], stored.y[0], stored.y[1]))
+            cmd.select('should_label', "chain %s and resi %s or should_label" % (stored.x[0], stored.x[1]))
+            cmd.select('should_label', "chain %s and resi %s or should_label" % (stored.y[0], stored.y[1]))
+            
+            if (stored.x[2] in posresList and stored.x[3] in posatomList and stored.y[2] in negresList and stored.y[3] in negatomList):
+                d = cmd.distance('saltbridge', "%s and index %s" % (pairs[0][0], pairs[0][1]), "%s and index %s" % (pairs[1][0], pairs[1][1]), cutoff=4.0)
+                result_s.append([stored.x, stored.y, float(d)])
+                cmd.color('salt_bridge_red', 'saltbridge')
+            elif stored.x[2] in hbonds_atoms.keys() and stored.x[2] != 'MET' and stored.y[2] in hbonds_atoms.keys() and stored.y[3] in hbonds_atoms[stored.y[2]]:
+                d = cmd.distance(hb_list_name, "%s and index %s" % (pairs[0][0], pairs[0][1]), "%s and index %s" % (pairs[1][0], pairs[1][1]), cutoff=3.5)
+                result_h.append([stored.x, stored.y, float(d)])
+                cmd.color('hydrogen_bond_blue', hb_list_name)
+    
+    return result_s, result_h
+
+
+def list_hydrophobic(selection, channel, partners, selection2=None, cutoff=4.0, angle=180, mode=1, hb_list_name='hydrophobic'):
+    cutoff = float(cutoff)
+    angle = float(angle)
+    mode = float(mode)
+    hydrophobiclist = ["ALA","VAL","LEU","ILE","PHE","PRO","MET"]
+    aromaticlist = ["PHE","TYR","TRP"]
+    aromaticatoms = ['CG','CZ','CD1','CD2','CE1','CE2']
+    
+    selection = selection + " & e. c+n"
+    hp = cmd.find_pairs(selection, selection, mode=mode, cutoff=cutoff, angle=angle)
+    hp.sort(key=lambda x:x[0][1])
+    
+    result = []
+    for pairs in hp:
+        stored.x = []
+        stored.y = []
+        cmd.iterate("%s and index %s" % (pairs[0][0], pairs[0][1]), 'stored.x += [chain,resi,resn,name]')
+        cmd.iterate("%s and index %s" % (pairs[1][0], pairs[1][1]), 'stored.y += [chain,resi,resn,name]')
+        
+        if (stored.x[2] in hydrophobiclist and stored.y[2] in hydrophobiclist):
+            if stored.x[0] in channel and stored.y[0] in partners:
+                cmd.show('stick', "chain %s and resi %s chain %s and resi %s" % (stored.x[0], stored.x[1], stored.y[0], stored.y[1]))
+                cmd.select('should_label', "chain %s and resi %s or should_label" % (stored.x[0], stored.x[1]))
+                cmd.select('should_label', "chain %s and resi %s or should_label" % (stored.y[0], stored.y[1]))
+                
+                if stored.x[2] in aromaticlist and stored.y[2] in aromaticlist:
+                    d = cmd.distance(hb_list_name, "%s and index %s" % (pairs[0][0], pairs[0][1]), "%s and index %s" % (pairs[1][0], pairs[1][1]), cutoff=5.0, mode=6)
+                    result.append([stored.x, stored.y, float(d)])
+                    cmd.color('pi_stack_purple', hb_list_name)
+                elif stored.x[2] in aromaticlist and stored.x[3] in aromaticatoms:
+                    d = cmd.distance(hb_list_name, "%s and index %s" % (pairs[0][0], pairs[0][1]), "%s and index %s" % (pairs[1][0], pairs[1][1]), cutoff=4.0, mode=7)
+                    result.append([stored.x, stored.y, float(d)])
+                    cmd.color('pi_cation_orange', hb_list_name)
+                elif stored.x[2] not in aromaticlist and stored.y[2] not in aromaticlist:
+                    d = cmd.distance(hb_list_name, "%s and index %s" % (pairs[0][0], pairs[0][1]), "%s and index %s" % (pairs[1][0], pairs[1][1]))
+                    result.append([stored.x, stored.y, float(d)])
+                    cmd.color('hydrophobic_gray', hb_list_name)
+        else:
+            continue
+
+    return result
+
+
+def select_interface_pair(bonds, filepath, various, allpairs, channel, partners, part1, part2):
+    R_A = []
+    specific_pair = [(subunit, partner) for subunit in channel for partner in partners]
+
+    for item in bonds:
+        pairs = (item[0][0], item[1][0])
+        if pairs in specific_pair:
+            R_A += [item]
+
+    if R_A != []:
+        chains = set([f'{x[0][0]},{y[1][0]}' for x in R_A for y in R_A if x[0][0] != y[1][0] and x[0][0].isdigit() == False and y[1][0].isdigit() == False])
+        allpairs[various] = {}
+        for chain in chains:
+            allpairs[various][chain] = []
+        for item in R_A:
+            pair = f'{item[0][1]}{amino_acid_map[item[0][2]]},{item[1][1]}{amino_acid_map[item[1][2]]}'
+            part1.append(f'{item[0][0]},{item[0][1]}')
+            part2.append(f'{item[1][0]},{item[1][1]}')
+            allpairs[various][f'{item[0][0]},{item[1][0]}'] += [pair]
+
+
+def draw_prolif_contacts(contact_file, selection="all"):
+    """Draw contacts from ProLIF output CSV file"""
+    if not os.path.exists(contact_file):
+        print(f"Contact file {contact_file} not found")
+        return
+    
+    interactions_drawn = {}
+    
+    with open(contact_file, 'r') as f:
+        lines = f.readlines()
+    
+    for line in lines:
+        if line.startswith('#') or not line.strip():
+            continue
+        
+        parts = line.strip().split(',')
+        if len(parts) < 8:
+            continue
+        
+        try:
+            lig_chain, lig_resid, lig_name = parts[0], parts[1], parts[2]
+            prot_chain, prot_resid, prot_name = parts[3], parts[4], parts[5]
+            interaction = parts[6]
+            color = parts[7] if len(parts) > 7 else 'white'
+            distance = float(parts[8]) if len(parts) > 8 else 0.0
+            
+            sel1 = f"chain {lig_chain} and resid {lig_resid} and name {lig_name}"
+            sel2 = f"chain {prot_chain} and resid {prot_resid} and name {prot_name}"
+            
+            inter_key = f"{interaction}_{lig_resid}_{prot_resid}"
+            if inter_key in interactions_drawn:
+                continue
+            
+            cmd.distance(f"contact_{inter_key}", sel1, sel2, cutoff=distance + 0.5)
+            
+            if color in PROLIF_INTERACTION_COLORS:
+                cmd.color(PROLIF_INTERACTION_COLORS[color], f"contact_{inter_key}")
+            else:
+                cmd.color(color, f"contact_{inter_key}")
+            
+            interactions_drawn[inter_key] = True
+            
+        except Exception as e:
+            print(f"Error processing line: {line}, error: {e}")
+            continue
+    
+    print(f"Drew {len(interactions_drawn)} unique contacts from {contact_file}")
+    return interactions_drawn
+
+
+def get_interaction_color(interaction_type, use_second=False):
+    """Get moland color for interaction type"""
+    suffix = '_second' if use_second else '_first'
+    return PROLIF_INTERACTION_COLORS.get(interaction_type, 'white')
+
+
+
+cmd.extend("draw_prolif_contacts", draw_prolif_contacts)
+cmd.extend("get_interaction_color", get_interaction_color)
+
+
+def _parse_chain_arg(chains):
+    if chains is None:
+        return None
+    if isinstance(chains, str):
+        return [c.strip() for c in chains.split(",") if c.strip()]
+    return [str(c).strip() for c in chains if str(c).strip()]
+
+
+def _apply_default_contact_style(receptor_chains, partner_chains):
+    receptor_sel = "+".join(receptor_chains)
+    partner_sel = "+".join(partner_chains)
+    if receptor_sel:
+        cmd.color("protein_gray", f"chain {receptor_sel}")
+    if partner_sel:
+        cmd.color("pi_cation_orange", f"chain {partner_sel}")
+    cmd.color("nitrogen_color", "element n")
+    cmd.color("oxygen_color", "element o")
+    cmd.color("sulfur_color", "element s")
+    cmd.color("fluorine_color", "element f")
+    cmd.set("cartoon_transparency", 0.7)
+
+
+def analyze_loaded_structure(selection="all", receptor_chains="A,B,C,D", partner_chains="E",
+                             output_csv=None, add_hydrogen=True):
+    receptor_chains = _parse_chain_arg(receptor_chains) or []
+    partner_chains = _parse_chain_arg(partner_chains) or []
+    if not receptor_chains or not partner_chains:
+        print("receptor_chains and partner_chains are required")
+        return {}
+
+    if cmd.count_atoms(selection) == 0:
+        print(f"Selection not found or empty: {selection}")
+        return {}
+
+    if add_hydrogen:
+        cmd.h_add(selection)
+
+    _apply_default_contact_style(receptor_chains, partner_chains)
+
+    allpairs = {}
+    part1 = []
+    part2 = []
+
+    sb, hb = list_electron_interaction(selection, receptor_chains, partner_chains)
+    hp = list_hydrophobic(selection, receptor_chains, partner_chains)
+
+    select_interface_pair(hb, "", "hbonds", allpairs, receptor_chains, partner_chains, part1, part2)
+    select_interface_pair(sb, "", "saltbridges", allpairs, receptor_chains, partner_chains, part1, part2)
+    select_interface_pair(hp, "", "hydrophobic", allpairs, receptor_chains, partner_chains, part1, part2)
+
+    model_name = str(selection).replace(" ", "_")
+    cmd.group(f"{model_name}_contact", f"hbonds hydrophobic saltbridge* {model_name}")
+
+    if output_csv:
+        output_path = Path(output_csv)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("a", newline="") as f:
+            writer = csv.writer(f, delimiter=",")
+            writer.writerow([model_name])
+            for type1 in allpairs:
+                for chain in allpairs[type1]:
+                    pairs = sorted(set(allpairs[type1][chain]))
+                    writer.writerow([type1, chain, "{" + ", ".join(repr(p) for p in pairs) + "}"])
+            writer.writerow([])
+
+    summary = {k: sum(len(set(v)) for v in allpairs[k].values()) for k in allpairs}
+    print(f"Analyzed selection: {selection}")
+    print(f"Receptor chains: {receptor_chains}; partner chains: {partner_chains}")
+    print(f"Contact summary: {summary}")
+    return allpairs
+
+
+def load_structures_from_dir(input_dir, pattern="*.pdb", object_prefix=""):
+    from glob import glob
+
+    input_dir = os.path.abspath(input_dir)
+    if not os.path.isdir(input_dir):
+        print(f"Input directory not found: {input_dir}")
+        return []
+
+    loaded = []
+    for file_path in sorted(glob(os.path.join(input_dir, pattern))):
+        obj_name = object_prefix + Path(file_path).stem
+        cmd.load(file_path, obj_name)
+        loaded.append(obj_name)
+
+    print(f"Loaded {len(loaded)} structures from {input_dir}")
+    return loaded
+
+
+def draw_loaded_contacts(selection="all", receptor_chains="A,B,C,D", ligand_chains="E", output_csv=None):
+    return analyze_loaded_structure(selection=selection, receptor_chains=receptor_chains,
+                                    partner_chains=ligand_chains, output_csv=output_csv)
+
+
+def prolif_pymol_agent(mode="loaded", input_dir=None, pattern="*.pdb", selection="all",
+                       receptor_chains="A,B,C,D", partner_chains="E", output_csv=None,
+                       object_prefix=""):
+    mode = str(mode).strip().lower()
+    if mode == "loaded":
+        return analyze_loaded_structure(selection=selection, receptor_chains=receptor_chains,
+                                        partner_chains=partner_chains, output_csv=output_csv)
+
+    if mode == "dir":
+        if not input_dir:
+            print("input_dir is required when mode='dir'")
+            return {}
+        loaded_objects = load_structures_from_dir(input_dir, pattern=pattern, object_prefix=object_prefix)
+        results = {}
+        for obj_name in loaded_objects:
+            results[obj_name] = analyze_loaded_structure(
+                selection=obj_name,
+                receptor_chains=receptor_chains,
+                partner_chains=partner_chains,
+                output_csv=output_csv,
+            )
+        return results
+
+    print("mode must be 'loaded' or 'dir'")
+    return {}
+
+
+cmd.extend("draw_loaded_contacts", draw_loaded_contacts)
+cmd.extend("prolif_pymol_agent", prolif_pymol_agent)
