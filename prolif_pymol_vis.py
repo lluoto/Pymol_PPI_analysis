@@ -15,6 +15,8 @@ from pymol import stored
 import time
 import csv
 import os
+import re
+import ast
 
 cmd.set_color('protein_gray', [0.89, 0.94, 0.98])
 cmd.set_color('ligand_green', [0.83, 0.89, 0.72])
@@ -57,6 +59,7 @@ amino_acid_map = {
     'MET': 'M', 'PHE': 'F', 'PRO': 'P', 'SER': 'S',
     'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
 }
+_AA_ONE_TO_THREE = {v: k for k, v in amino_acid_map.items()}
 
 hbonds_atoms = {
     'ARG': ['NE', 'NH1', 'NH2'],
@@ -254,53 +257,162 @@ def select_interface_pair(bonds, filepath, various, allpairs, channel, partners,
             allpairs[various][f'{item[0][0]},{item[1][0]}'] += [pair]
 
 
-def draw_prolif_contacts(contact_file, selection="all"):
-    """Draw contacts from ProLIF output CSV file"""
+def _normalize_resn_code(resn):
+    resn = str(resn).strip().upper()
+    if not resn:
+        return None
+    if len(resn) == 1:
+        return _AA_ONE_TO_THREE.get(resn)
+    if len(resn) == 3:
+        return resn
+    return None
+
+
+def _parse_residue_token(token):
+    token = str(token).strip().strip('"').strip("'")
+    if not token:
+        return None, None
+
+    patterns = [
+        r'^(?P<resn>[A-Za-z]{1,3})(?P<resi>-?\d+[A-Za-z]?)$',
+        r'^(?P<resi>-?\d+[A-Za-z]?)(?P<resn>[A-Za-z]{1,3})$',
+    ]
+    for pattern in patterns:
+        m = re.match(pattern, token)
+        if m:
+            return _normalize_resn_code(m.groupdict().get('resn')), m.groupdict().get('resi')
+
+    m = re.search(r'-?\d+[A-Za-z]?', token)
+    if m:
+        return None, m.group(0)
+
+    return None, token
+
+
+def _closest_atom_point(obj_name, selection_expr, fallback_expr=None):
+    coords = cmd.get_model(selection_expr).atom
+    if not coords and fallback_expr:
+        coords = cmd.get_model(fallback_expr).atom
+    if not coords:
+        return False
+
+    best = coords[0]
+    for atom in coords[1:]:
+        if atom.index < best.index:
+            best = atom
+
+    cmd.delete(obj_name)
+    cmd.pseudoatom(obj_name, pos=list(best.coord))
+    cmd.hide('everything', obj_name)
+    return True
+
+
+def draw_prolif_contacts(contact_file, selection="all", cutoff=6.0, show_labels=True):
     if not os.path.exists(contact_file):
         print(f"Contact file {contact_file} not found")
         return
-    
+
     interactions_drawn = {}
-    
-    with open(contact_file, 'r') as f:
-        lines = f.readlines()
-    
-    for line in lines:
-        if line.startswith('#') or not line.strip():
-            continue
-        
-        parts = line.strip().split(',')
-        if len(parts) < 8:
-            continue
-        
-        try:
-            lig_chain, lig_resid, lig_name = parts[0], parts[1], parts[2]
-            prot_chain, prot_resid, prot_name = parts[3], parts[4], parts[5]
-            interaction = parts[6]
-            color = parts[7] if len(parts) > 7 else 'white'
-            distance = float(parts[8]) if len(parts) > 8 else 0.0
-            
-            sel1 = f"chain {lig_chain} and resid {lig_resid} and name {lig_name}"
-            sel2 = f"chain {prot_chain} and resid {prot_resid} and name {prot_name}"
-            
-            inter_key = f"{interaction}_{lig_resid}_{prot_resid}"
-            if inter_key in interactions_drawn:
+    contact_count = {'total': 0}
+
+    with open(contact_file, 'r', newline='') as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:
                 continue
-            
-            cmd.distance(f"contact_{inter_key}", sel1, sel2, cutoff=distance + 0.5)
-            
-            if color in PROLIF_INTERACTION_COLORS:
-                cmd.color(PROLIF_INTERACTION_COLORS[color], f"contact_{inter_key}")
-            else:
-                cmd.color(color, f"contact_{inter_key}")
-            
-            interactions_drawn[inter_key] = True
-            
-        except Exception as e:
-            print(f"Error processing line: {line}, error: {e}")
-            continue
-    
-    print(f"Drew {len(interactions_drawn)} unique contacts from {contact_file}")
+            if len(row) == 1 and (not row[0].strip() or row[0].startswith('#')):
+                continue
+
+            try:
+                contacts = []
+                if len(row) >= 9 and row[0].strip() in ('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'):
+                    lig_chain, lig_resid_raw = row[0].strip(), row[1].strip()
+                    lig_name = row[2].strip() if len(row) > 2 and row[2].strip() else '*'
+                    prot_chain, prot_resid_raw = row[3].strip(), row[4].strip()
+                    prot_name = row[5].strip() if len(row) > 5 and row[5].strip() else '*'
+                    interaction = row[6].strip()
+                    color = row[7].strip() if len(row) > 7 and row[7].strip() else 'white'
+                    distance = float(row[8]) if len(row) > 8 and row[8].strip() else cutoff
+                    contacts.append((lig_chain, lig_resid_raw, lig_name, prot_chain, prot_resid_raw, prot_name, interaction, color, distance))
+                elif len(row) == 3:
+                    interaction = row[0].strip()
+                    chain_pair = [c.strip() for c in row[1].split(',', 1)]
+                    if len(chain_pair) != 2:
+                        continue
+                    pair_set = ast.literal_eval(row[2])
+                    if isinstance(pair_set, str):
+                        pair_set = {pair_set}
+                    for pair in sorted(str(pair).strip() for pair in pair_set if str(pair).strip()):
+                        pair_bits = [p.strip() for p in pair.split(',', 1)]
+                        if len(pair_bits) != 2:
+                            continue
+                        contacts.append((chain_pair[0], pair_bits[0], '*', chain_pair[1], pair_bits[1], '*', interaction, 'white', cutoff))
+                else:
+                    continue
+
+                for lig_chain, lig_resid_raw, lig_name, prot_chain, prot_resid_raw, prot_name, interaction, color, distance in contacts:
+                    lig_resn, lig_resi = _parse_residue_token(lig_resid_raw)
+                    prot_resn, prot_resi = _parse_residue_token(prot_resid_raw)
+                    if lig_resi is None or prot_resi is None:
+                        print(f"Skipping line with unparseable residue ids: {row}")
+                        continue
+
+                    inter_key = f"{interaction}_{lig_chain}_{lig_resi}_{prot_chain}_{prot_resi}"
+                    if inter_key in interactions_drawn:
+                        continue
+
+                    base_sel1 = f"chain {lig_chain} and resi {lig_resi}"
+                    base_sel2 = f"chain {prot_chain} and resi {prot_resi}"
+                    if lig_resn:
+                        base_sel1 += f" and resn {lig_resn}"
+                    if prot_resn:
+                        base_sel2 += f" and resn {prot_resn}"
+
+                    stick_sel1 = f"({base_sel1}) and (sidechain or name CA)"
+                    stick_sel2 = f"({base_sel2}) and (sidechain or name CA)"
+
+                    point_sel1 = stick_sel1
+                    point_sel2 = stick_sel2
+                    if lig_name != '*':
+                        point_sel1 = f"({base_sel1}) and name {lig_name}"
+                    if prot_name != '*':
+                        point_sel2 = f"({base_sel2}) and name {prot_name}"
+
+                    point1 = f"pt1_{inter_key}"
+                    point2 = f"pt2_{inter_key}"
+                    if not _closest_atom_point(point1, point_sel1, stick_sel1):
+                        continue
+                    if not _closest_atom_point(point2, point_sel2, stick_sel2):
+                        continue
+
+                    dist_name = f"contact_{inter_key}"
+                    cmd.distance(dist_name, point1, point2, cutoff=distance + 0.5)
+
+                    pymol_color = PROLIF_INTERACTION_COLORS.get(color, color)
+                    if pymol_color in PROLIF_INTERACTION_COLORS:
+                        pymol_color = PROLIF_INTERACTION_COLORS[color]
+                    if pymol_color in cmd.get_color_indices():
+                        cmd.color(pymol_color, dist_name)
+
+                    cmd.show('sticks', stick_sel1)
+                    cmd.show('sticks', stick_sel2)
+
+                    interactions_drawn[inter_key] = True
+                    contact_count['total'] += 1
+
+                    if show_labels:
+                        cmd.select('should_label', f"{base_sel1} or should_label")
+                        cmd.select('should_label', f"{base_sel2} or should_label")
+
+                    if interaction not in contact_count:
+                        contact_count[interaction] = 0
+                    contact_count[interaction] += 1
+
+            except Exception as e:
+                print(f"Error processing line: {','.join(row)}, error: {e}")
+                continue
+
+    print(f"Drew {len(interactions_drawn)} unique contacts from {os.path.basename(contact_file)}")
     return interactions_drawn
 
 
