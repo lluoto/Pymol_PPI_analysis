@@ -273,6 +273,7 @@ def _parse_residue_token(token):
     if not token:
         return None, None
 
+    # Try the two patterns that work for: GLU214, 214A, 214GLU
     patterns = [
         r'^(?P<resn>[A-Za-z]{1,3})(?P<resi>-?\d+[A-Za-z]?)$',
         r'^(?P<resi>-?\d+[A-Za-z]?)(?P<resn>[A-Za-z]{1,3})$',
@@ -280,9 +281,19 @@ def _parse_residue_token(token):
     for pattern in patterns:
         m = re.match(pattern, token)
         if m:
-            return _normalize_resn_code(m.groupdict().get('resn')), m.groupdict().get('resi')
+            resn = m.groupdict().get('resn')
+            resi = m.groupdict().get('resi')
+            if resn and resi:
+                return _normalize_resn_code(resn), resi
 
-    m = re.search(r'-?\d+[A-Za-z]?', token)
+    # For ambiguous tokens like "195SER" or "454D":
+    # try all splits: keep only digits in resi, everything else is resn
+    m = re.match(r'^(-?\d+)([A-Za-z]+)$', token)
+    if m:
+        return _normalize_resn_code(m.group(2)), m.group(1)
+
+    # If nothing matched but there are digits, use them as resi
+    m = re.search(r'-?\d+', token)
     if m:
         return None, m.group(0)
 
