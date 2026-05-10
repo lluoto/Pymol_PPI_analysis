@@ -325,6 +325,9 @@ def draw_prolif_contacts(contact_file, selection="all", cutoff=6.0, show_labels=
 
     interactions_drawn = {}
     contact_count = {'total': 0}
+    label_sel = show_labels if isinstance(show_labels, str) else ('should_label' if show_labels else None)
+    if label_sel:
+        cmd.select(label_sel, 'none')
 
     with open(contact_file, 'r', newline='') as f:
         reader = csv.reader(f)
@@ -411,9 +414,9 @@ def draw_prolif_contacts(contact_file, selection="all", cutoff=6.0, show_labels=
                     interactions_drawn[inter_key] = True
                     contact_count['total'] += 1
 
-                    if show_labels:
-                        cmd.select('should_label', f"{base_sel1} or should_label")
-                        cmd.select('should_label', f"{base_sel2} or should_label")
+                    if label_sel:
+                        cmd.select(label_sel, f"{base_sel1} or {label_sel}")
+                        cmd.select(label_sel, f"{base_sel2} or {label_sel}")
 
                     if interaction not in contact_count:
                         contact_count[interaction] = 0
@@ -480,6 +483,7 @@ def analyze_loaded_structure(selection="all", receptor_chains="A,B,C,D", partner
     allpairs = {}
     part1 = []
     part2 = []
+    cmd.select('should_label', 'none')
 
     sb, hb = list_electron_interaction(selection, receptor_chains, partner_chains)
     hp = list_hydrophobic(selection, receptor_chains, partner_chains)
