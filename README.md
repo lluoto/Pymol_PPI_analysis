@@ -19,10 +19,11 @@ PyMOL-based protein-protein interaction (PPI) analysis script. Detect and visual
 ## Files
 
 | File | Description |
-|---|---|
+|---|---|---|
 | `prolif_pymol_vis.py` | Main PPI analysis script (unified agent entrypoint,final script) |
 | `residue_contact_ring.py` | Ring-specific contact analysis variant |
 | `findcontactsV2-3.tcl` | VMD Tcl script for trajectory contact/SASA analysis (forked from [FindContacts](https://github.com/TMiclot/FindContacts)) |
+| `glp1r_boltz_analysis/` | GLP-1R Boltz structure analysis pipeline — centroid clustering, affinity histogram, PLIP interaction analysis, PyMOL PSE generation with ProLIF-colored dashes |
 
 ## Quick Start
 
