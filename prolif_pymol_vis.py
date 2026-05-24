@@ -17,6 +17,15 @@ import csv
 import os
 import re
 import ast
+import subprocess
+import json
+import tempfile
+
+# --- PLIP integration constants ---
+# PLIP detection script path (system Python, not PyMOL's Python)
+PLIP_SCRIPT = '/tmp/_plip_detect.py'
+PLIP_PYTHON = '/usr/bin/python3'
+PLIP_TEMP_PDB = '/tmp/prolif_plip_temp.pdb'
 
 cmd.set_color('protein_gray', [0.89, 0.94, 0.98])
 cmd.set_color('ligand_green', [0.83, 0.89, 0.72])
@@ -464,7 +473,7 @@ def _apply_default_contact_style(receptor_chains, partner_chains):
 
 
 def analyze_loaded_structure(selection="all", receptor_chains="A,B,C,D", partner_chains="E",
-                             output_csv=None, add_hydrogen=True):
+                             output_csv=None, add_hydrogen=True, use_plip=False):
     receptor_chains = _parse_chain_arg(receptor_chains) or []
     partner_chains = _parse_chain_arg(partner_chains) or []
     if not receptor_chains or not partner_chains:
@@ -475,6 +484,24 @@ def analyze_loaded_structure(selection="all", receptor_chains="A,B,C,D", partner
         print(f"Selection not found or empty: {selection}")
         return {}
 
+    # --- PLIP mode ---
+    if use_plip:
+        temp_pdb = _save_temp_pdb(selection)
+        if not temp_pdb:
+            print("PLIP: Cannot save temp PDB, falling back to PyMOL detection")
+            use_plip = False
+        else:
+            plip_data = _call_plip(temp_pdb, receptor_chains, partner_chains, mode='ppi')
+            if plip_data and plip_data.get('interactions'):
+                _draw_plip_results(plip_data)
+                print("PLIP: Analyzed selection: %s" % selection)
+                print("PLIP: Chains: R=%s P=%s" % (receptor_chains, partner_chains))
+                print("PLIP: Total interactions: %d" % plip_data['n_interactions'])
+                return plip_data
+            else:
+                print("PLIP: No interactions found or analysis failed, falling back")
+
+    # --- Original PyMOL detection (fallback or use_plip=False) ---
     if add_hydrogen:
         cmd.h_add(selection)
 
@@ -532,18 +559,21 @@ def load_structures_from_dir(input_dir, pattern="*.pdb", object_prefix=""):
     return loaded
 
 
-def draw_loaded_contacts(selection="all", receptor_chains="A,B,C,D", ligand_chains="E", output_csv=None):
+def draw_loaded_contacts(selection="all", receptor_chains="A,B,C,D", ligand_chains="E", 
+                          output_csv=None, use_plip=False):
     return analyze_loaded_structure(selection=selection, receptor_chains=receptor_chains,
-                                    partner_chains=ligand_chains, output_csv=output_csv)
+                                    partner_chains=ligand_chains, output_csv=output_csv,
+                                    use_plip=use_plip)
 
 
 def prolif_pymol_agent(mode="loaded", input_dir=None, pattern="*.pdb", selection="all",
                        receptor_chains="A,B,C,D", partner_chains="E", output_csv=None,
-                       object_prefix=""):
+                       object_prefix="", use_plip=False):
     mode = str(mode).strip().lower()
     if mode == "loaded":
         return analyze_loaded_structure(selection=selection, receptor_chains=receptor_chains,
-                                        partner_chains=partner_chains, output_csv=output_csv)
+                                        partner_chains=partner_chains, output_csv=output_csv,
+                                        use_plip=use_plip)
 
     if mode == "dir":
         if not input_dir:
@@ -557,6 +587,7 @@ def prolif_pymol_agent(mode="loaded", input_dir=None, pattern="*.pdb", selection
                 receptor_chains=receptor_chains,
                 partner_chains=partner_chains,
                 output_csv=output_csv,
+                use_plip=use_plip,
             )
         return results
 
@@ -566,3 +597,148 @@ def prolif_pymol_agent(mode="loaded", input_dir=None, pattern="*.pdb", selection
 
 cmd.extend("draw_loaded_contacts", draw_loaded_contacts)
 cmd.extend("prolif_pymol_agent", prolif_pymol_agent)
+
+
+# ======================== PLIP Integration ========================
+
+def _save_temp_pdb(selection="all", output_path=PLIP_TEMP_PDB):
+    """Save a PyMOL selection to a temp PDB file for PLIP analysis."""
+    try:
+        cmd.save(output_path, selection)
+        return output_path
+    except Exception as e:
+        print("PLIP: Failed to save temp PDB:", e)
+        return None
+
+
+def _call_plip(pdb_file, receptor_chains, partner_chains, mode='ppi',
+               cutoff=5.0, timeout=120):
+    """
+    Call the PLIP detection script as subprocess (system Python).
+    Returns parsed JSON dict.
+    """
+    if not os.path.exists(PLIP_SCRIPT):
+        print("PLIP: Script not found at %s" % PLIP_SCRIPT)
+        return None
+    if not os.path.exists(pdb_file):
+        print("PLIP: PDB not found at %s" % pdb_file)
+        return None
+
+    rc = ','.join(receptor_chains) if isinstance(receptor_chains, (list, tuple)) else receptor_chains
+    pc = ','.join(partner_chains) if isinstance(partner_chains, (list, tuple)) else partner_chains
+
+    cmd_args = [
+        PLIP_PYTHON, PLIP_SCRIPT,
+        pdb_file, rc, pc,
+        '--mode', mode,
+        '--cutoff', str(cutoff),
+    ]
+    try:
+        output = subprocess.check_output(cmd_args, timeout=timeout,
+                                         stderr=subprocess.PIPE)
+        data = json.loads(output.decode('utf-8'))
+        return data
+    except subprocess.TimeoutExpired:
+        print("PLIP: Analysis timed out (%ds)" % timeout)
+    except subprocess.CalledProcessError as e:
+        print("PLIP: Error (%d): %s" % (e.returncode, e.stderr.decode()[:200]))
+    except json.JSONDecodeError as e:
+        print("PLIP: JSON parse error:", e)
+    return None
+
+
+def _draw_plip_results(plip_data, receptor_ns='receptor', partner_ns='partner'):
+    """
+    Draw interactions from PLIP JSON results in PyMOL.
+    Uses existing MOLAND colors and interaction type conventions.
+
+    Args:
+        plip_data: parsed JSON dict from _plip_detect.py
+        receptor_ns: name for receptor chain object (for labeling)
+        partner_ns: name for partner chain object
+    """
+    # PLIP type → PROLIF color key mapping
+    PLIP_TYPE_COLOR_MAP = {
+        'HydrogenBond': 'HBDonor',
+        'Hydrophobic': 'Hydrophobic',
+        'PiStacking': 'PiStacking',
+        'PiCation': 'PiCation',
+        'SaltBridge': 'Cationic',
+        'HalogenBond': 'XBDonor',
+        'WaterBridge': 'WaterBridge',
+    }
+
+    if not plip_data or 'interactions' not in plip_data:
+        print("PLIP: No interactions to draw")
+        return
+
+    interactions = plip_data['interactions']
+    drawn_types = set()
+    contact_count = {}
+    label_sel = 'should_label'
+    cmd.select(label_sel, 'none')
+
+    # Draw each interaction as a distance dash
+    for i, entry in enumerate(interactions):
+        try:
+            itype = entry['type']
+            r_chain = entry['receptor_chain']
+            r_resnum = entry['receptor_resnum']
+            r_resname = entry['receptor_resname']
+            r_atom = entry['receptor_atom']
+            p_chain = entry['partner_chain']
+            p_resnum = entry['partner_resnum']
+            p_resname = entry['partner_resname']
+            p_atom = entry['partner_atom']
+            dist = entry['distance']
+
+            # Skip dashes that would hit numeric atom indices (from PLIP ligand mode)
+            if isinstance(p_atom, int) or (isinstance(p_atom, str) and p_atom.isdigit() and int(p_atom) > 1000):
+                continue
+
+            # Build PyMOL selections for both atoms
+            sel_r = '(all and chain %s and resi %s and name %s)' % (r_chain, r_resnum, r_atom)
+            sel_p = '(all and chain %s and resi %s and name %s)' % (p_chain, p_resnum, p_atom)
+
+            # Generate unique dash name by type + residue identifier
+            dash_name = 'd_%s_%s%s_%s%s' % (itype, r_resname, r_resnum, p_resname, p_resnum)
+
+            # Map PLIP type to PROLIF color key
+            prolif_key = PLIP_TYPE_COLOR_MAP.get(itype, itype)
+            try:
+                color_name = PROLIF_INTERACTION_COLORS.get(prolif_key, 'white')
+            except:
+                color_name = 'white'
+
+            # Create the distance dash
+            cmd.distance(dash_name, sel_r, sel_p)
+            cmd.color(color_name, dash_name)
+            cmd.hide('labels', dash_name)
+            cmd.set('dash_gap', 0.3, dash_name)
+            cmd.set('dash_length', 0.3, dash_name)
+            cmd.set('dash_radius', 0.04, dash_name)
+
+            # Show sidechain sticks for both residues (colored by type)
+            sel_r_sc = '(all and chain %s and resi %s)' % (r_chain, r_resnum)
+            sel_p_sc = '(all and chain %s and resi %s)' % (p_chain, p_resnum)
+            cmd.show('sticks', sel_r_sc)
+            cmd.show('sticks', sel_p_sc)
+            cmd.color(color_name, sel_r_sc)
+            cmd.color(color_name, sel_p_sc)
+
+            # Track for labeling
+            cmd.select(label_sel, '%s or %s or %s' % (label_sel, sel_r_sc, sel_p_sc))
+
+            # Type counts
+            drawn_types.add(itype)
+            contact_count[itype] = contact_count.get(itype, 0) + 1
+
+        except Exception as e:
+            print("PLIP: Error drawing interaction %d: %s" % (i, e))
+
+    print("PLIP: Drawn %d interactions (%s)" % (
+        len(interactions),
+        ', '.join('%s=%d' % (t, contact_count[t]) for t in sorted(contact_count))))
+
+
+# ======================== Command extensions ========================
